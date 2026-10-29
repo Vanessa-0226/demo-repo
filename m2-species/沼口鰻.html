@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>沼口鰻</title>
+<style>
+:root{--ink:#4a443c;--glass:rgba(255,250,240,.6);box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ink:#4a443c;--glass:rgba(255,250,240,.6)}}
+:root[data-theme="dark"]{--ink:#4a443c;--glass:rgba(255,250,240,.6)}
+html,body{height:100%;margin:0;overflow:hidden;background:#b9b2a6;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));padding:7px 16px;border-radius:14px;background:var(--glass);color:var(--ink);font-size:12px;letter-spacing:.08em;white-space:nowrap}#hint b{font-weight:600;letter-spacing:.2em}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint"><b>W A S D</b> 控制方向 ・ <b>Space</b> 按住昂首瞄準、放開撲擊 ・ 拖曳旋轉視角 ・ 滾輪縮放</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(()=>{
+const R=Math.random,TAU=Math.PI*2,PI=Math.PI,clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const HEAD=new THREE.Color(62/255,64/255,66/255),TAIL=new THREE.Color(104/255,106/255,104/255),TENT=0xc9ba84;
+const SK=1.2,NUM=48,SEGL=12,MAXR=38,BG=0xb9b2a6,A=3200,M=380,PIT=36,WLVL=-.3*PIT;  // M：1 公尺 ≈ 380 單位（沼口鰻約 1.5 公尺的蛇）
+let renderer;
+try{renderer=new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:true});}
+catch(e){document.body.insertAdjacentHTML('beforeend','<p style="padding:2rem">這個裝置不支援 WebGL。</p>');return;}
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene=new THREE.Scene();scene.background=new THREE.Color(BG);scene.fog=new THREE.Fog(BG,450,1500);
+const cam=new THREE.PerspectiveCamera(42,1,1,9000);
+scene.add(new THREE.HemisphereLight(0xf6f1e6,0x8b8173,1));
+const sun=new THREE.DirectionalLight(0xfff3dc,.7);sun.position.set(300,600,500);scene.add(sun);
+
+/* 地面：深咖啡色。不寫入深度，這樣水窪的坑才看得到；地上的東西用環狀座標重複出現 */
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(9000,9000),new THREE.MeshStandardMaterial({color:0x5e4a3a,roughness:1,depthWrite:false}));
+ground.rotation.x=-PI/2;ground.renderOrder=-10;scene.add(ground);
+const rockMat=new THREE.MeshStandardMaterial({color:0x5f564d,roughness:.9,flatShading:true}),
+ clumpMats=[0x4a3a2c,0x6b5640,0x54402f].map(c=>new THREE.MeshStandardMaterial({color:c,roughness:1})),
+ patchMat=new THREE.MeshStandardMaterial({color:0x43362a,roughness:1,transparent:true,opacity:.4,depthWrite:false}),
+ bowlMat=new THREE.MeshStandardMaterial({color:0x3a2f25,roughness:1,side:THREE.DoubleSide}),
+ waterMat=new THREE.MeshStandardMaterial({color:0x66736b,roughness:.08,metalness:.3,transparent:true,opacity:.6,depthWrite:false}),
+ rebarMat=new THREE.MeshStandardMaterial({color:0x3b3d40,roughness:.65,metalness:.5,flatShading:true});
+const decor=[],bumps=[],pits=[],rebars=[];
+const addD=(m,y)=>{m.userData.bx=R()*A;m.userData.bz=R()*A;m.userData.y=y;scene.add(m);decor.push(m);return m.userData;};
+const wrap=(b,h)=>((b-h+A/2)%A+A)%A-A/2+h;
+
+/* 10 種不規則輪廓（幾組不同頻率的起伏疊成），水窪與泥痕重複使用 */
+const SH=[],shapeGeos=[],bowlGeos=[],NP=48,K=8;
+const rad=(a,ph)=>1+.14*Math.sin(2*a+ph[0])+.12*Math.sin(3*a+ph[1])+.09*Math.sin(5*a+ph[2])+.06*Math.sin(7*a+ph[3]);
+for(let n=0;n<10;n++){
+ const ph=[R()*TAU,R()*TAU,R()*TAU,R()*TAU],pts=[];SH.push(ph);
+ for(let k=0;k<NP;k++){const a=k/NP*TAU,rr=rad(a,ph);pts.push(new THREE.Vector2(Math.cos(a)*rr,Math.sin(a)*rr));}
+ const g=new THREE.ShapeGeometry(new THREE.Shape(pts));g.rotateX(-PI/2);shapeGeos.push(g);
+ /* 坑：由邊緣（高度 0）往中心逐漸下凹的碗形 */
+ const pos=[],idx=[];
+ for(let k=0;k<=K;k++){const rho=1-k/K;for(let i=0;i<NP;i++){pos.push(pts[i].x*rho,-PIT*(1-rho*rho),-pts[i].y*rho);}}
+ for(let k=0;k<K;k++)for(let i=0;i<NP;i++){const a=k*NP+i,b=k*NP+(i+1)%NP,c=(k+1)*NP+i,d=(k+1)*NP+(i+1)%NP;idx.push(a,c,b,b,c,d);}
+ const bg=new THREE.BufferGeometry();bg.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));bg.setIndex(idx);bg.computeVertexNormals();bowlGeos.push(bg);}
+
+/* 可攀爬的凸起（石頭、泥塊、碎石）：當作橢球，記下尺寸供高度查詢 */
+function bump(geo,mat,rx,ry,rz,cy){const m=new THREE.Mesh(geo,mat);m.scale.set(rx,ry,rz);m.rotation.y=R()*TAU;
+ const u=addD(m,cy);Object.assign(u,{rx,ry,rz,cy,yaw:m.rotation.y,hs:cy+ry*.661,R2:(Math.max(rx,rz)*(1+SK))**2});bumps.push(m);}
+for(let i=0;i<45;i++){const r=(.08+R()*.32)*M,ry=r*(.5+R()*.4);bump(new THREE.DodecahedronGeometry(1,0),rockMat,r*(1+R()*.6),ry,r*(1+R()*.6),r*.15);}   // 石頭 8～40 公分
+for(let i=0;i<110;i++){const r=(.04+R()*.11)*M;bump(new THREE.SphereGeometry(1,10,8),clumpMats[i%3],r*(1+R()*.5),r*(.3+R()*.2),r*(1+R()*.5),0);}   // 泥塊 4～15 公分
+for(let i=0;i<140;i++){const r=(.01+R()*.04)*M;bump(new THREE.DodecahedronGeometry(1,0),rockMat,r,r*.6,r,0);}   // 碎石 1～5 公分
+for(let i=0;i<40;i++){const m=new THREE.Mesh(shapeGeos[i%10],patchMat),r=(.3+R()*.6)*M;m.scale.set(r,1,r*(.6+R()*.4));m.rotation.y=R()*TAU;addD(m,.2+R()*.3);}   // 濕泥痕跡
+/* 水窪：實際下凹的坑，水面在坑深約 30% 的位置；半徑約 30～90 公分 */
+for(let i=0;i<24;i++){const g=new THREE.Group(),r=(.3+R()*.6)*M,sx=1+R()*.5,sz=.65+R()*.35,sh=i%10;
+ const bowl=new THREE.Mesh(bowlGeos[sh],bowlMat),w=new THREE.Mesh(shapeGeos[sh],waterMat);
+ bowl.scale.set(r*sx,1,r*sz);w.scale.set(r*sx*.837,1,r*sz*.837);w.position.y=WLVL;
+ g.add(bowl,w);g.rotation.y=R()*TAU;
+ const u=addD(g,0);Object.assign(u,{rx:r*sx,rz:r*sz,yaw:g.rotation.y,sh,R2:(Math.max(r*sx,r*sz)*1.45)**2});pits.push(g);}
+/* 鋼筋：深灰色、高約 7～11 公尺、粗約 0.3 公尺；不可攀爬，會擋住沼口鰻 */
+for(let i=0;i<6;i++){
+ const h=(7+R()*4)*M,r=(.1+R()*.04)*M,g=new THREE.CylinderGeometry(r*.92,r,h,7,1);g.translate(0,h/2-40,0);
+ const m=new THREE.Mesh(g,rebarMat),lean=i%2?.05+R()*.4:R()*.05,az=R()*TAU;
+ m.rotation.set(Math.sin(az)*lean,0,Math.cos(az)*lean);
+ const u=addD(m,0);u.rad=r;
+ while(Math.hypot(((u.bx+A/2)%A)-A/2,((u.bz+A/2)%A)-A/2)<M*1.6){u.bx=R()*A;u.bz=R()*A;}
+ rebars.push(m);}
+
+/* 查詢某處的地面高度：坑為負、凸起物取其表面 */
+function terrH(x,z){
+ let pit=0,h=0;
+ for(const g of pits){const u=g.userData,dx=x-u.wx,dz=z-u.wz;if(dx*dx+dz*dz>u.R2)continue;
+  const c=Math.cos(u.yaw),s=Math.sin(u.yaw),lx=(dx*c-dz*s)/u.rx,lz=(dx*s+dz*c)/u.rz,p=Math.hypot(lx,lz)/rad(Math.atan2(-lz,lx),SH[u.sh]);
+  if(p<1)pit=Math.min(pit,-PIT*(1-p*p));}
+ h=pit;
+ for(const m of bumps){const u=m.userData,dx=x-u.wx,dz=z-u.wz;if(dx*dx+dz*dz>u.R2)continue;
+  const c=Math.cos(u.yaw),s=Math.sin(u.yaw),lx=(dx*c-dz*s)/u.rx,lz=(dx*s+dz*c)/u.rz,q=lx*lx+lz*lz;
+  const d=Math.sqrt(q);
+  if(d<1+SK){let e=d<1?u.cy+u.ry*Math.sqrt(1-q):0;
+   /* 看不見的緩坡：從石頭肩部（d=.75）起，用平滑曲線一路延伸到地面，身體走在這個坡上而不是貼著石頭的陡峭邊緣 */
+   if(d>.75){const t=(d-.75)/(1+SK-.75),sm=t*t*(3-2*t);e=Math.max(e,u.hs*(1-sm));}
+   h=Math.max(h,e);}}
+ return h;}
+
+/* 蟲身：頭深尾淺的灰色，帶薄塗層的半霧面 */
+const segs=[],P=[],sy=[],rr=[];let inited=false;
+for(let i=0;i<NUM;i++){const p=i/(NUM-1),cp=p*p*(3-2*p);
+ const m=new THREE.MeshPhysicalMaterial({color:HEAD.clone().lerp(TAIL,cp),roughness:.5,clearcoat:.35,clearcoatRoughness:.45});
+ let mesh;
+ if(i===0){
+  const prof=[[0,-24],[28,-24],[37,-14],[38,-4],[38,18],[37.2,21.5],[35.5,24],[33,24.8],[30,22],[25,17.5],[19,13.8],[12,11.2],[6,10.2],[0,10]].map(a=>new THREE.Vector2(a[0],a[1]));
+  const g=new THREE.LatheGeometry(prof,40);g.rotateX(PI/2);m.side=THREE.DoubleSide;
+  mesh=new THREE.Group();mesh.add(new THREE.Mesh(g,m));
+ }else mesh=new THREE.Mesh(new THREE.SphereGeometry(1,28,20),m);
+ mesh.rotation.order='YXZ';scene.add(mesh);
+ const sh=new THREE.Mesh(new THREE.CircleGeometry(1,24),new THREE.MeshBasicMaterial({color:0x2a2018,transparent:true,opacity:.24,depthWrite:false}));
+ sh.rotation.x=-PI/2;scene.add(sh);
+ segs.push({mesh,sh});P.push(new THREE.Vector3(0,0,-i*SEGL));sy.push(0);rr.push(MAXR);}
+const trail=[];for(let k=200;k>=0;k--)trail.push({x:0,z:-k*3});
+
+/* 頭部唇緣上的一圈淡黃色觸手：每根分 6 節，依時間彎曲 */
+const head=segs[0].mesh,tentMat=new THREE.MeshPhysicalMaterial({color:TENT,roughness:.45,clearcoat:.3,clearcoatRoughness:.4}),tents=[],SEG=6;
+for(let k=0;k<18;k++){
+ const th=k/18*TAU,len=34+(k%2)*8,sl=len/(SEG+2),root=new THREE.Group();
+ root.position.set(Math.cos(th)*34,Math.sin(th)*34,24);
+ root.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),new THREE.Vector3(Math.cos(th)*Math.sin(.8),Math.sin(th)*Math.sin(.8),Math.cos(.8)));
+ head.add(root);
+ const joints=[root];let par=root;
+ for(let j=0;j<SEG;j++){
+  const g=new THREE.ConeGeometry(3.2*(1-j/(SEG+2)),sl*3,8,1);g.translate(0,sl*1.5,0);par.add(new THREE.Mesh(g,tentMat));
+  const nj=new THREE.Group();nj.position.y=sl;par.add(nj);joints.push(nj);par=nj;}
+ tents.push({joints,k});}
+
+/* 輸入：WASD 以「畫面方向」決定蟲子要往哪裡走 */
+const keys={};
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if('wasd'.includes(k)&&k.length===1)keys[k]=true;if(e.key===' '){keys[' ']=true;e.preventDefault();}});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
+addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
+const cv={yaw:PI+.5,pitch:.3,dist:900},cvs=document.getElementById('c');let drag=false,lx=0,ly=0;
+cvs.addEventListener('pointerdown',e=>{drag=true;lx=e.clientX;ly=e.clientY;cvs.setPointerCapture(e.pointerId);});
+cvs.addEventListener('pointerup',()=>drag=false);
+cvs.addEventListener('pointermove',e=>{if(!drag)return;cv.yaw-=(e.clientX-lx)*.006;cv.pitch=clamp(cv.pitch+(e.clientY-ly)*.005,.03,1.4);lx=e.clientX;ly=e.clientY;});
+cvs.addEventListener('wheel',e=>{e.preventDefault();cv.dist=clamp(cv.dist*(1+e.deltaY*.001),250,1800);},{passive:false});
+function resize(){renderer.setSize(innerWidth,innerHeight,false);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();}
+addEventListener('resize',resize);resize();
+
+/* 撲擊：st = idle（平常）／rear（昂首瞄準）／pounce（撲出）；rear 是前半身抬起的程度 0～1 */
+const REAR_H=170,PDUR=.45,POUNCE_L=NUM*SEGL;
+let st='idle',rear=0,pu=0,pdx=0,pdz=0,shake=0;
+const xhMat=new THREE.MeshBasicMaterial({color:0xffd84a,transparent:true,opacity:.95,depthTest:false,fog:false}),xh=new THREE.Group();
+{const add=g=>{const m=new THREE.Mesh(g,xhMat);m.renderOrder=20;xh.add(m);return m;};
+ const ring=new THREE.RingGeometry(40,50,40);ring.rotateX(-PI/2);add(ring);
+ const dot=new THREE.CircleGeometry(5,16);dot.rotateX(-PI/2);add(dot);
+ for(let a=0;a<4;a++){const g=a%2?new THREE.PlaneGeometry(8,34):new THREE.PlaneGeometry(34,8);g.rotateX(-PI/2);add(g).position.set(Math.cos(a*PI/2)*66,0,Math.sin(a*PI/2)*66);}}
+xh.visible=false;scene.add(xh);
+let phi=0,hdg=0,speed=0,climbF=1,last=performance.now();
+const tgt=new THREE.Vector3();
+(function frame(now){
+ const dt=Math.min(.05,(now-last)/1000);last=now;const time=now*.003;
+
+ /* 地上的東西與水窪：換算成目前的世界座標 */
+ const h0x=P[0].x,h0z=P[0].z;ground.position.set(h0x,0,h0z);
+ for(const m of decor){const u=m.userData;u.wx=wrap(u.bx,h0x);u.wz=wrap(u.bz,h0z);m.position.set(u.wx,u.y,u.wz);}
+
+ /* 方向與前進 */
+ const fx=-Math.sin(cv.yaw),fz=-Math.cos(cv.yaw),rx=-fz,rz=fx;
+ let dx=0,dz=0;
+ if(keys.w){dx+=fx;dz+=fz;}if(keys.s){dx-=fx;dz-=fz;}if(keys.d){dx+=rx;dz+=rz;}if(keys.a){dx-=rx;dz-=rz;}
+ const moving=dx!==0||dz!==0;
+ if(moving){const diff=((Math.atan2(dx,dz)-phi+PI)%TAU+TAU)%TAU-PI;phi+=diff*Math.min(1,dt*3.5);}
+ /* 爬坡時降低速度：看前方 40 單位的地面比腳下高多少，坡越陡越慢（最慢仍保有 80% 的速度） */
+ const slope=Math.max(0,(terrH(P[0].x+Math.sin(phi)*40,P[0].z+Math.cos(phi)*40)-terrH(P[0].x,P[0].z))/40);
+ climbF+=(1/(1+.6*slope)-climbF)*Math.min(1,dt*6);
+ speed+=((moving?200*Math.max(.8,climbF):0)-speed)*Math.min(1,dt*3);
+ /* 空白鍵：按住 → 前半身昂起並顯示準星；放開 → 以昂起的高度向前撲出，落地時畫面震動 */
+ const sp=!!keys[' '];
+ if(st==='idle'&&sp)st='rear';
+ if(st==='rear'&&!sp){if(rear>.25){st='pounce';pu=0;pdx=Math.sin(phi);pdz=Math.cos(phi);}else st='idle';}
+ if(st==='pounce'){
+  pu+=dt/PDUR;rear=1-Math.min(pu,1)**2;hdg=phi;
+  P[0].x+=pdx*(POUNCE_L/PDUR)*dt;P[0].z+=pdz*(POUNCE_L/PDUR)*dt;
+  if(pu>=1){st='idle';rear=0;shake=.35;speed=0;}   // 落地：震動一下，速度回到正常
+ }else{
+  rear+=((st==='rear'?1:0)-rear)*Math.min(1,dt*5);
+  hdg=phi+.6*(speed/200)*Math.sin(time*.75);   // 蛇行：頭左右擺動，身體沿著頭的軌跡前進
+  P[0].x+=Math.sin(hdg)*speed*dt;P[0].z+=Math.cos(hdg)*speed*dt;
+ }
+
+ /* 碰撞：鋼筋與自己的身體擋住蟲頭（沿著表面滑開，不會穿過） */
+ const HR=rr[0]*.95;
+ for(let it=0;it<3;it++){
+  for(const b of rebars){const u=b.userData,ex=P[0].x-u.wx,ez=P[0].z-u.wz,d=Math.hypot(ex,ez),mm=u.rad+HR;
+   if(d<mm&&d>1e-6){P[0].x=u.wx+ex/d*mm;P[0].z=u.wz+ez/d*mm;}}
+  for(let i=7;i<NUM;i++){const ex=P[0].x-P[i].x,ez=P[0].z-P[i].z,d=Math.hypot(ex,ez),mm=HR+rr[i]*.85;
+   if(d<mm&&d>1e-6){P[0].x=P[i].x+ex/d*mm;P[0].z=P[i].z+ez/d*mm;}}
+ }
+
+ /* 身體沿著頭走過的軌跡，每隔 SEGL 取一節 */
+ {const lt=trail[trail.length-1];
+  if(Math.hypot(P[0].x-lt.x,P[0].z-lt.z)>=3){trail.push({x:P[0].x,z:P[0].z});if(trail.length>300)trail.shift();}
+  let acc=0,px=P[0].x,pz=P[0].z,i=1,k=trail.length-1;
+  while(i<NUM&&k>=0){const q=trail[k],d=Math.hypot(px-q.x,pz-q.z);
+   if(d<1e-6){k--;continue;}
+   if(acc+d>=SEGL){const f=(SEGL-acc)/d;P[i].x=px+(q.x-px)*f;P[i].z=pz+(q.z-pz)*f;px=P[i].x;pz=P[i].z;acc=0;i++;}
+   else{acc+=d;px=q.x;pz=q.z;k--;}}}
+
+ xh.visible=sp&&st==='rear';
+ if(xh.visible){const tx=P[0].x+Math.sin(phi)*POUNCE_L,tz=P[0].z+Math.cos(phi)*POUNCE_L,k=1+.08*Math.sin(now*.008);
+  xh.position.set(tx,terrH(tx,tz)+4,tz);xh.scale.set(k,1,k);}
+
+ /* 每一節：半徑「呼吸」（速度放慢）、依地形抬高或下沉 */
+ for(let i=0;i<NUM;i++){
+  const p=i/(NUM-1),t=1-Math.pow(p,2)*.75,r=MAXR*t*(.93+(Math.sin(time*.8-i*.1)+1)/2*.14);rr[i]=r;
+  const x=P[i].x,z=P[i].z,q=r*.65;
+  const xx=Math.max(0,1-i/(NUM*.5)),w=xx*xx*(3-2*xx),
+   h=Math.max(terrH(x,z),terrH(x+q,z),terrH(x-q,z),terrH(x,z+q),terrH(x,z-q))+r+REAR_H*w*rear;
+  sy[i]=inited?sy[i]+(h-sy[i])*Math.min(1,dt*(st==='pounce'?28:9)):h;}
+ for(let i=1;i<NUM;i++)sy[i]=clamp(sy[i],sy[i-1]-SEGL*(.8+1.2*rear),sy[i-1]+SEGL*(.8+1.2*rear));   // 相鄰兩節的高度差有上限，脊椎不會斷開
+ inited=true;
+ segs.forEach((s,i)=>{
+  const r=rr[i];let ux,uz;
+  if(i===0){ux=P[0].x-P[2].x;uz=P[0].z-P[2].z;const l=Math.hypot(ux,uz);if(l<1e-3){ux=Math.sin(hdg);uz=Math.cos(hdg);}else{ux/=l;uz/=l;}}else{ux=P[i-1].x-P[i].x;uz=P[i-1].z-P[i].z;const l=Math.hypot(ux,uz)||1;ux/=l;uz/=l;}
+  const a=Math.max(i-1,0),b=Math.min(i+1,NUM-1),pitch=i===0?Math.atan2(sy[0]-sy[3],3*SEGL):Math.atan2(sy[a]-sy[b],(b-a)*SEGL);
+  if(i===0){const hs=r/MAXR;s.mesh.scale.set(hs,hs,1);}else s.mesh.scale.set(r,r,r*(i<=2?.5:1.15));
+  s.mesh.rotation.y=Math.atan2(ux,uz);s.mesh.rotation.x=-pitch*(i===0?1-rear:1);
+  s.mesh.position.set(P[i].x,sy[i],P[i].z);
+  s.sh.position.set(P[i].x,sy[i]-r+.4,P[i].z);s.sh.scale.set(r*1.15,r*1.15,1);
+ });
+ tents.forEach(o=>{for(let j=1;j<=SEG;j++){const ph=time+(j-1)*.7+o.k*.35,a=.28*(.4+(j-1)/SEG);o.joints[j].rotation.x=a*Math.sin(ph);o.joints[j].rotation.z=a*Math.cos(ph);}});
+
+ /* 相機跟著蟲身中段 */
+ const mid=Math.floor(NUM*.3);tgt.set(P[mid].x,40,P[mid].z);
+ const cp=Math.cos(cv.pitch);
+ cam.position.set(tgt.x+Math.sin(cv.yaw)*cp*cv.dist,tgt.y+Math.sin(cv.pitch)*cv.dist,tgt.z+Math.cos(cv.yaw)*cp*cv.dist);
+ if(shake>0){const a=shake/.35*9;cam.position.x+=(R()-.5)*2*a;cam.position.y+=(R()-.5)*2*a;cam.position.z+=(R()-.5)*2*a;shake-=dt;}
+ cam.lookAt(tgt);
+ renderer.render(scene,cam);requestAnimationFrame(frame);
+})(last);
+})();
+</script>
+</body>
+</html>
